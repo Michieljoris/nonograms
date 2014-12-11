@@ -1,0 +1,4 @@
+#+TITLE: nonograms
+
+First attempt at solving problem set at clojure meetup in A'dam 10-12-2014
+
