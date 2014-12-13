@@ -1,35 +1,18 @@
 (ns nonograms.core
   (:gen-class)
-
   (:require [clojure.core.async :as async
              :refer [close! go >! <! take! put! chan alts!]]
             ;; [clojure.core.async :refer :all :as async]
             [clojure.pprint :refer [pprint]]
-            )
-  )
+            ))
 
-;; (:require-macros [cljs.core.async.macros :refer [go]])
-;;   (:require [cljs.core.async :as async
-;;              :refer [>! <! put! chan alts!]]
+" 
+ The idea is that you recursively walk down a tree, with every row of the board being a level in the tree. For every level every possible combination is tried given the constraint for the level. These combinations are the branches of the tree at the level of that row. To avoid having to remember all the combination we're doing a depth first dive into the tree, so at most we remember the number of levels (rows on the board). When we get to the last level we might have found a solution, depending on whether the column constraints are validated. Tro prevent having to try every single combination and having to walk the complete tree we can cut of branches by checking the column constraints for every row combination before we recursively start trying the combinations of the next level. 
 
+"
 
-;; (go (println "It works!" (<! (go 42))))
+;; ********** Permutate constraints **********
 
-
-;; (defn generate []
-;;   (let [fbc (chan 1)]
-;;     (go
-;;       (>! fbc 1)
-;;       (>! fbc 2)
-;;       (>! fbc 3)
-;;       (>! fbc 4)
-;;       (close! fbc))
-;;     fbc)
-;;   )
-
-;; (def c (generate))
-
-;; (go (println "It works!" (<! c)))
 (defn left-most
   "Takes a constraint and returns left most realization as a vector of [pos length] vectors."
   [constraint]
@@ -54,60 +37,35 @@
     )
   )
 
-(defn process-butlast
-  ""
-  [partial-constraint max-width]
-  (if partial-constraint
-    (do
-      ;; (println [partial-constraint max-width])
-      (permutate partial-constraint max-width)
-    )
-    )
-  )
-
-(concat [[0 1]] (vec (cons [1 2] [])))
-
 (defn permutate [constraint max-width end-blocks]
-  (let [line (left-most constraint)]
-    (println ">>>" (concat  line end-blocks) )
+  "Returns a channel that will keep delivering new permutations of a constraint and nil when all there are no more permutations possible"
+  (let [c (chan 1)
+        line (left-most constraint)]
+    (go
+      (>! c (concat  line end-blocks) )
+      (loop  [line (move-right-block-by-one line max-width)]
+        (if line
+          (let  [partial-constraint (butlast constraint)
+                 partial-width (dec (first (last line)))
+                 new-end-blocks (cons  (last line) end-blocks)]
+            (if partial-constraint 
+              (let [subc (permutate partial-constraint partial-width new-end-blocks)]
+                (loop []
+                  (when-let [p (<! subc)]
+                    (>! c p) (recur))))
+              (>! c (concat line end-blocks)))
+            (recur (move-right-block-by-one line max-width)))))
+      (close! c))
+    c))
 
-    (loop  [line (move-right-block-by-one line max-width)]
-      (if line
-        (let  [partial-constraint (butlast constraint)
-               partial-width (dec (first (last line)))
-               new-end-blocks (cons  (last line) end-blocks)
-               ]
-          (if partial-constraint 
-            (permutate partial-constraint partial-width new-end-blocks)
-            (println "---" (concat line end-blocks) )
-            )
-          (recur (move-right-block-by-one line max-width))))
-      ))
-    
-  )
+;; ********** Solve **********
 
-
-
-(pprint "+++++++++++++++++++++++++++")
-(pprint  (permutate [1 2 1] 9 []))
-" 
- The idea is that you recursively walk down a tree, with every row of the board being a level in the tree. For every level every possible combination is tried given the constraint for the level. These combinations are the branches of the tree at the level of that row. To avoid having to remember all the combination we're doing a depth first dive into the tree, so at most we remember the number of levels (rows on the board). When we get to the last level we might have found a solution, depending on whether the column constraints are validated. Tro prevent having to try every single combination and having to walk the complete tree we can cut of branches by checking the column constraints for every row combination before we recursively start trying the combinations of the next level. 
-
-"
-
-
-(def board {
-            :rows [[1 2] [4] [1] [2]]
-            :columns [ [1] [4] [1] [1]]
-            })
+(def board {:rows [ [1 2] [2 1] [1]]
+            :columns [ [1] [1] [1] [1]  [1]]})
 
 (defn height [board] (count (:rows board)))
 (defn width [board] (count (:columns board)))
 
-
-(defn empty-solution [board]
- (repeat (height board) (repeat (width board) nil)) 
-  )
 
 (defn test-column
   "Checks a column against its constraint. The column can contain nil for unknown values. Returns the column if it could be validated by the constraint. Nil if it couldn't possibly given the known values in the column"
@@ -116,17 +74,50 @@
   
   )
 
-(defn next-combination
-  "Takes in a contraint and a line width and returns a channel that barfs up all combinations one by one. "
-  [constraint width]
-  
+(defn next-solution
+  ""
+  [board]
+  (let [width (width board)
+        perm (fn [constraint] (permutate constraint width []))
+        c (perm (first (:rows board)))
+        rows (map perm (:rows board))
+        ]
+    (go
+      (loop []
+        (when-let [p (<! (first rows))]
+          (println "ok!!" p)
+          (recur)
+          )))
+    )
   )
 
-(defn solve
-  "Checks a "
-  [board solution level]
-  solution
-  )
+
+(next-solution board)
+
+
+;; (defn perm2 [constraint max-width]
+;;   (let [permc (permutate constraint max-width [])]
+;;     (go
+;;       (loop []
+;;         (when-let [p (<! permc)]
+;;           (println "ok!!" p)
+;;           (recur)
+;;           )))
+;;       )
+;;     )
+
+;; (pprint "+++++++++++++++++++++++++++")
+;; (perm2 [1 2] 9)
+;; (def c (perm2 [1 2 1] 9))
+;; (pprint  (perm2 [1 2 1] 9))
+
+;; (go (println "It works!" (<! c)))
+;; (go (println "It works!" (<! c)))
+
+
+;; (defn empty-solution [board]
+;;  (repeat (height board) (repeat (width board) nil)) 
+;;   )
 
 
 
