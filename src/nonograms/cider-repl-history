@@ -2,4 +2,4 @@
 ;; Automatically written history of CIDER REPL session
 ;; Edit at your own risk
 
-("1" "(empty-solution 1)" "(empty-solution)" "(repeat 10 [])" "(repeat 10 \"\")" "(height board)" "(test1)" "\"tesinng\"\"tesinng\"\"tesinng\"\"tesinng\"\"tesinng\"(test1)" "1")
+("1" "(seq (rest [1]))" "(empty? (rest [1]))" "(seq '())" "1" "(empty-solution 1)" "(empty-solution)" "(repeat 10 [])" "(repeat 10 \"\")" "(height board)" "(test1)" "\"tesinng\"\"tesinng\"\"tesinng\"\"tesinng\"\"tesinng\"(test1)" "1")
