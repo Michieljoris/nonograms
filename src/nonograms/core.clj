@@ -1,9 +1,10 @@
 (ns nonograms.core
   (:gen-class)
   (:require [clojure.core.async :as async
-             :refer [pipe close! go >! <! take! put! chan alts!]]
+             :refer [<!! pipe close! go >! <! take! put! chan alts!]]
             ;; [clojure.core.async :refer :all :as async]
             [clojure.pprint :refer [pprint]]
+            [clojure.zip :as z]
             ))
 
 " 
@@ -11,7 +12,31 @@
 
 "
 
-;; ********** Permutate constraints **********
+(println "********** Start **********")
+
+; ********** Board **********
+
+(def board {:rows [ [1] [1] [1] ]
+            ;; (def board {:rows [ [1 2] ]
+            :columns [ [1] [1] [1]]})
+
+
+(defn height [board] (count (:rows board)))
+(defn width [board] (count (:columns board)))
+
+(defn make-random-board
+  "Produce a random board of a certain width and height, density is the percentage of the cells that should be colored in, ranging from 0 to 100"
+  [width height density]
+  (let [number-of-cells (* width height)
+        enabled (quot (* density number-of-cells) 100)
+        ]
+    enabled
+    
+    )
+  )
+(make-random-board 5 10 51)
+
+; ********** Permutate constraints **********
 
 (defn left-most
   "Takes a constraint and returns left most realization as a vector of [pos length] vectors."
@@ -22,42 +47,15 @@
                   new-pos (+ last-pos last-length 1)]
               (conj p [new-pos n])
               ))
-          [] constraint)
-  )
+          [] constraint))
 
 (defn move-right-block-by-one
   "Takes a line and moves the right most block one more to the right or returns nil if block is already utmost right."
   [line max-width]
   (let [[pos width] (last line)
-        new-end (+ pos width 1)
-        ]
+        new-end (+ pos width 1)]
     (if (<= new-end max-width) 
-      (conj (vec (butlast line)) [(inc pos) width])
-      )
-    )
-  )
-
-(defn permutate-async [constraint max-width end-blocks]
-  "Returns a channel that will keep delivering new permutations of a constraint and nil when all there are no more permutations possible"
-  (let [c (chan 1)
-        line (left-most constraint)]
-    (go
-      (>! c (concat  line end-blocks) )
-      (loop  [line (move-right-block-by-one line max-width)]
-        (if line
-          (let  [partial-constraint (butlast constraint)
-                 partial-width (dec (first (last line)))
-                 new-end-blocks (cons  (last line) end-blocks)]
-            (if partial-constraint 
-              (let [subc (permutate-async partial-constraint partial-width new-end-blocks)]
-                (loop []
-                  (when-let [p (<! subc)]
-                    (>! c p) (recur))))
-              (>! c (concat line end-blocks)))
-            (recur (move-right-block-by-one line max-width)))))
-      (close! c))
-    c))
-
+      (conj (vec (butlast line)) [(inc pos) width]))))
 
 (defn permutate [constraint max-width end-blocks]
   "Returns a list of all possible permuations of a constraint"
@@ -80,36 +78,37 @@
                  (move-right-block-by-one line max-width))
           lines)))))
 
-(println "**********")
-;; (def result  (permutate [1 2 1 ] 9 []))
-;; (doseq [l result] (println l))
-;; (def end-blocks [])
-;; (def max-width 9)
-;; (loop  [line (move-right-block-by-one [[0 1]] max-width)
-;;         lines []]
-;;         (if line
-;;           (recur (move-right-block-by-one line max-width)
-;;                  (conj lines (concat line end-blocks) ))
-;;           lines))
-;; (conj [[[2 3]]] [[1 1]] )
-
 ;; ********** Solve **********
 
+(defn test-line
+  "Checks a line against its constraint. The line can have a tail of nil values. Returns the line if it could be validated by the constraint. Nil if it couldn't possibly given the known values in the line"
+  [line constraint]
+  (let [partial-constraint
+        (->> line
+          (partition-by nil?)
+          first
+          (partition-by identity)
+          (filter (fn [[x & more]] (= x 1)))
+          (map count))
+        partial-constraint-length (count partial-constraint)]
+    (if (= (take partial-constraint-length constraint) partial-constraint) line)))
 
-(defn height [board] (count (:rows board)))
-(defn width [board] (count (:columns board)))
+;; (test-line [0 1 1 nil nil nil] [ 2 1 1 2])
 
-(defn empty-solution [board]
- (repeat (height board) (repeat (width board) nil)) 
-  )
+(defn transpose-matrix [matrix]
+  (apply mapv vector matrix))
 
+;; (transpose-matrix [['a 'b] ['c 'd]])
 
-(defn test-column
-  "Checks a column against its constraint. The column can contain nil for unknown values. Returns the column if it could be validated by the constraint. Nil if it couldn't possibly given the known values in the column"
-  [board solution column]
-  
-  
-  )
+(defn test-columns
+  "Takes a  board and a (possible partial) solution and returns the solution if it's validated by the boards column constraints"
+  [board solution]
+  (let [lines (transpose-matrix solution)]
+    (every? (fn [pair] ;;(println pair)
+              (apply test-line pair))
+            (map vector lines (:columns board)))))
+
+;; (test-columns board [[1 0] [0 1]])
 
 (defn line
   "Takes a line described as vector of blocks and returns a line made up of ones and zeros"
@@ -126,138 +125,56 @@
 
 ;; (concat  (repeat 0 0) [1 2 3])
 ;; (line [[2 2] [5 5] [11 2]] 13)
-(defn dive-async
-  "Finds all combinations of permutations of rows and pushes them one by one by one on the return channel."
-  [permutate row  more-rows width]
-  (let [c (chan 1)
-        permutations (permutate row)]
+
+(defn dive
+  "Finds all combinations of permutations of rows and pushes them one by one by one on the return channel by walking down the permutations tree of row constraints, ignoring branches that are not validated by the column restraints."
+  [row more-rows width solution?]
+  (let [c (chan 1)]
+    ;; (println 'hello)
     (go
-      (loop []
-        (when-let [p (<! permutations)]
+      (loop [permutations row]
+        (when-let [p (first permutations)]
           (if (seq more-rows)
-            (let [ch2 (dive-async permutate (first more-rows) (rest more-rows) width)]
+            (let [ch2 (dive (first more-rows) (rest more-rows) width solution?)]
               (loop [] 
                 (when-let [p2 (<! ch2)]
                   (>! c (cons (line p width) p2))
-                  (recur)))
-              )
-            (>! c [(line p width)])
-            )
-          (recur)))
-      (close! c)
-      )
-    c
-    )
-  )
-
-(defn inc-at
-  "Increases number in vector v at position n by one. The number flips over to 0 when it's bigger than the base of this position, in this case the :carry tag of the returned tuple is :t. The :indices tag's value is the increased indices vector"
-  [v n bases]
-  (let [i (inc (nth v n))
-        b (nth bases n)]
-    ;; (println "in inc-at" v n)
-    {:indices (vec (flatten [(subvec v 0 n) (rem i b) (subvec v (inc n))]))
-     :carry (if  (= 1 (quot i b)) :t)}))
-
-(inc-at [0 1 4 3 4] 2 [5 5 5 5])
-
-(defn inc-vec
-  "Increases the value in indices by one, treating it as a number with a specified base per index. Returns nil if trying to increase max value possible "
-  [indices bases]
-
-  (let [l (- (count indices) 1)]
-    (loop [ i l
-            temp (inc-at indices i bases)
-           ]
-      ;; (println i temp)
-      (if (:carry temp)
-        (if (> i 0)
-          (recur (dec i) (inc-at (:indices temp) (dec i) bases)))
-        (:indices temp)
-        )
-      ) 
-  ))
-
-;; (inc-vec [0 0 0 0] [3 3 3 3])
-
-(defn values-at
-  "Uses indices to retrieve and return the values at the corresponding vectors in vectors as a seq"
-  [indices vectors]
-  (let [fns (map (fn [index] (fn [coll] (nth coll index))) indices)]
-    (map (fn [v] ((first v) (second v))) (partition 2 (interleave fns vectors)))
-    )
-  )
-
-;; (values-at [0 1] [['a 'b] ['c 'd]])
+                  (recur))))
+            (>! c [(line p width)]))
+          (recur (rest permutations))))
+      (close! c))
+    c))
 
 
-(defn dive
+(defn solve
   ""
-  [rows width]
-  (let [c (chan 1)
-        bases (map count rows)
-        ]
-    (go
-      (loop [indices (vec (repeat (count rows) 0))]
-        (>! c (map (fn [blocks] (line blocks width))  (values-at indices rows)))
-        ;; (>! c (values-at indices rows))
-        ;; (>! c indices)
-        (if indices
-          (recur (inc-vec indices bases)))
-        )
-      ;; (>! c "Ok then!!")
-      )
-    c
-    )
-  )
-
-(defn print-all-solutions
-  ""
-  [board]
-  (let [width (width board)
+  [board max-solutions]
+  (let [
+        width (width board)
         permutate (fn [constraint] (permutate constraint width []))
         rows (map permutate  (:rows board))
-        solutions (dive rows width)
+        solutions (dive (first rows) (rest rows) width (partial test-columns board))
+        ;; solutions (dive board)
         ]
 
     (go
-      (loop [result []]
-        (let [s (<! solutions)]
-          (if s
+      (loop [result [] counter 0]
+        (let [solution (<! solutions)]
+          (if (and solution (or (not max-solutions) (< counter max-solutions)))
             (do 
-              (println "ok" s)
-              (recur (conj result s)))
-            result))
-        )
-      )
-    ))
+              
+              (println "ok" solution (test-columns board solution))
+              (recur (conj result solution) (inc counter)))
+            result))))))
 
-(print-all-solutions board)
+
+(def result (solve board nil))
+;; (println (<!! result))
+;; (go
+;;   (println (<! result)))
 
 ;; (cons  '(1 1 3) ['(1 2 3)])
-(def board {:rows [ [1 2] [2 2]  ]
-;; (def board {:rows [ [1 2] ]
-            :columns [ [1] [1] [1] [1] [1] ]})
 
-(defn print-all-solutions-async
-  ""
-  [board]
-  (let [width (width board)
-        permutate (fn [constraint] (permutate-async constraint width []))
-        rows (:rows board)
-        solutions (dive-async permutate (first rows) (rest rows) width)
-        ]
-    (go
-      (println  (loop [result []]
-                    (let [s (<! solutions)]
-                      (if s
-                        (recur (conj result s))
-                        result))
-                    ))
-      )
-  ))
-
-(print-all-solutions-async board)
 
 
 ;; (defn perm2 [constraint max-width]
@@ -414,3 +331,114 @@
 ;;     ))
 
 
+
+;; (defn permutate-async [constraint max-width end-blocks]
+;;   "Returns a channel that will keep delivering new permutations of a constraint and nil when all there are no more permutations possible"
+;;   (let [c (chan 1)
+;;         line (left-most constraint)]
+;;     (go
+;;       (>! c (concat  line end-blocks) )
+;;       (loop  [line (move-right-block-by-one line max-width)]
+;;         (if line
+;;           (let  [partial-constraint (butlast constraint)
+;;                  partial-width (dec (first (last line)))
+;;                  new-end-blocks (cons  (last line) end-blocks)]
+;;             (if partial-constraint 
+;;               (let [subc (permutate-async partial-constraint partial-width new-end-blocks)]
+;;                 (loop []
+;;                   (when-let [p (<! subc)]
+;;                     (>! c p) (recur))))
+;;               (>! c (concat line end-blocks)))
+;;             (recur (move-right-block-by-one line max-width)))))
+;;       (close! c))
+;;     c))
+
+;; (defn dive-asynrr
+;;                 (when-let [p2 (<! ch2)]
+;;                   (>! c (cons (line p width) p2))
+;;                   (recur)))
+;;               )
+;;             (>! c [(line p width)])
+;;             )
+;;           (recur)))
+;;       (close! c))
+;;     c))
+
+;; (defn print-all-solutions-async
+;;   ""
+;;   [board]
+;;   (let [width (width board)
+;;         permutate (fn [constraint] (permutate-async constraint width []))
+;;         rows (:rows board)
+;;         solutions (dive-async permutate (first rows) (rest rows) width)
+;;         ]
+;;     (go
+;;       (println  (loop [result []]
+;;                     (let [s (<! solutions)]
+;;                       (if s
+;;                         (recur (conj result s))
+;;                         result))
+;;                     ))
+;;       )
+;;   ))
+
+;; (print-all-solutions-async board)
+
+;; (defn inc-at
+;;   "Increases number in vector v at position n by one. The number flips over to 0 when it's bigger than the base of this position, in this case the :carry tag of the returned tuple is :t. The :indices tag's value is the increased indices vector"
+;;   [v n bases]
+;;   (let [i (inc (nth v n))
+;;         b (nth bases n)]
+;;     ;; (println "in inc-at" v n)
+;;     {:indices (vec (flatten [(subvec v 0 n) (rem i b) (subvec v (inc n))]))
+;;      :carry (if  (= 1 (quot i b)) :t)}))
+
+;; ;; (inc-at [0 1 4 3 4] 2 [5 5 5 5])
+
+;; (defn inc-vec
+;;   "Increases the value in indices by one, treating it as a number with a specified base per index. Returns nil if trying to increase max value possible "
+;;   [indices bases]
+
+;;   (let [l (- (count indices) 1)]
+;;     (loop [ i l
+;;             temp (inc-at indices i bases)]
+;;       (if (:carry temp)
+;;         (if (> i 0)
+;;           (recur (dec i) (inc-at (:indices temp) (dec i) bases)))
+;;         (:indices temp)))))
+
+;; ;; (inc-vec [0 0 0 0] [3 3 3 3])
+
+;; (defn values-at
+;;   "Uses indices to retrieve and return the values at the corresponding vectors in vectors as a seq"
+;;   [indices vectors]
+;;   (let [fns (map (fn [index] (fn [coll] (nth coll index))) indices)]
+;;     (map (fn [v] ((first v) (second v))) (partition 2 (interleave fns vectors)))))
+
+;; ;; (values-at [0 1 1] [['a 'b] ['c 'd] ['e 'f]])
+
+
+;; ;;********************
+;; ;;********************
+;; ;;********************
+
+
+;; (defn dive-by-indices
+;;   "Returns a channel that delivers all possible combinations of permutations of row constraints by enumeration"
+;;   [board]
+;;   (let [
+;;         width (width board)
+;;         permutate (fn [constraint] (permutate constraint width []))
+;;         rows (map permutate (:rows board))
+;;         c (chan 1)
+;;         bases (map count rows)]
+;;     (go
+;;       (loop [indices (vec (repeat (count rows) 0))]
+;;         (>! c (map (fn [blocks] (line blocks width))  (values-at indices rows)))
+;;         (if indices
+;;           (recur (inc-vec indices bases)))))
+;;     c))
+
+;; (defn empty-solution [board]
+;;  (repeat (height board) (repeat (width board) nil)) 
+;;   )
