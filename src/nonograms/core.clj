@@ -128,14 +128,35 @@
 
 (defn dive
   "Finds all combinations of permutations of rows and pushes them one by one by one on the return channel by walking down the permutations tree of row constraints, ignoring branches that are not validated by the column restraints."
-  [row more-rows width solution?]
+  [rows width solution solution?]
   (let [c (chan 1)]
-    ;; (println 'hello)
     (go
-      (loop [permutations row]
+      (loop [permutations (first rows)]
+        (if (seq permutations)
+          (let [p (first permutations)
+                solution-line (line p width)
+                solution-plus-one (conj solution solution-line)]
+            (if (solution? solution-plus-one)
+              (if (seq (rest rows))
+                (let [ch2 (dive (rest rows) width solution-plus-one solution?)]
+                  (loop [] 
+                    (when-let [p2 (<! ch2)]
+                      (>! c p2)
+                      (recur))))
+                (>! c solution-plus-one)))
+            (recur (rest permutations)))))
+      (close! c))
+    c))
+
+(defn dive2
+  "Finds all combinations of permutations of rows and pushes them one by one by one on the return channel by walking down the permutations tree of row constraints, ignoring branches that are not validated by the column restraints."
+  [rows width solution?]
+  (let [c (chan 1)]
+    (go
+      (loop [permutations (first rows)]
         (when-let [p (first permutations)]
-          (if (seq more-rows)
-            (let [ch2 (dive (first more-rows) (rest more-rows) width solution?)]
+          (if (seq (rest rows))
+            (let [ch2 (dive (rest rows) width solution?)]
               (loop [] 
                 (when-let [p2 (<! ch2)]
                   (>! c (cons (line p width) p2))
@@ -153,7 +174,7 @@
         width (width board)
         permutate (fn [constraint] (permutate constraint width []))
         rows (map permutate  (:rows board))
-        solutions (dive (first rows) (rest rows) width (partial test-columns board))
+        solutions (dive rows width [] (partial test-columns board))
         ;; solutions (dive board)
         ]
 
