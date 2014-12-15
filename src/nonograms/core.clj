@@ -230,6 +230,6 @@
    :rows [[] [1 1] [1] [2 1 1] [1 1 1] [1 2 1 1] [1] [1] [] []]
    :columns [[] [1] [] [3] [1 1] [] [5] [1] [1 4] []]})
 
-(test-program nil 10 10 20)
+(test-program nil 10 10 50)
 
 ;; (test-program board2 5 5 20)

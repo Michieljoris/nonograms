@@ -1,4 +1,9 @@
 #+TITLE: nonograms
 
-First attempt at solving problem set at clojure meetup in A'dam 10-12-2014
+Solution of problem set at clojure meetup in A'dam 10-12-2014
+
+First proper clojure program. Used core.async to practice using it. Solutions
+are printed as they are found.
+
+It can solve a 10 by 10 board quickly if it is about 50% covered.
 
